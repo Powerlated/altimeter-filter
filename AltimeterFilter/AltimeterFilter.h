@@ -11,6 +11,9 @@ extern "C"
     float AltimeterFilterGetVelocity(void);
     float AltimeterFilterGetAcceleration(void);
     float AltimeterFilterGetJerk(void);
+    void AltimeterFilterSetProcessVariancePreApogee(int i, float val);
+    void AltimeterFilterSetProcessVariancePostApogee(int i, float val);
+    void AltimeterFilterSetObservationVariance(int i, float val);
 #ifdef __cplusplus
 }
 #endif

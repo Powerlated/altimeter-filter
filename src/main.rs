@@ -1,7 +1,4 @@
-use altimeter_filter::{
-    AltimeterFilterGetAcceleration, AltimeterFilterGetVelocity, AltimeterFilterGetJerk, AltimeterFilterInit,
-    AltimeterFilterProcess, pressure_mbar_to_ft,
-};
+use altimeter_filter::*;
 use csv::DeserializeRecordsIter;
 use eframe::egui::{self, Vec2b};
 use egui_plot::{Legend, Line, Plot, PlotPoint, PlotPoints};
@@ -13,7 +10,7 @@ fn main() -> eframe::Result {
     let args: Vec<String> = env::args().collect();
     let open_data_log_path = args.get(1).unwrap().clone();
     // let open_data_log_path =
-        // "../irec/flight-data-logs/test-flight-4-12-2025_flight-only.csv".to_string();
+    // "../irec/flight-data-logs/test-flight-4-12-2025_flight-only.csv".to_string();
 
     let native_options = eframe::NativeOptions {
         vsync: false,
@@ -44,6 +41,8 @@ pub struct LogPacketV1Csv {
 }
 
 struct App {
+    vec_packets: Vec<LogPacketV1Csv>,
+
     vec_alt: Vec<PlotPoint>,
     vec_alt_filtered: Vec<PlotPoint>,
     vec_vel_filtered: Vec<PlotPoint>,
@@ -52,101 +51,195 @@ struct App {
 
     link_axis: Vec2b,
     link_cursor: Vec2b,
+
+    process_variance_pre_apogee: [f32; 4],
+    process_variance_post_apogee: [f32; 4],
+    observation_variance: [f32; 2],
 }
 
 impl App {
     /// Called once before the first frame.
     pub fn new(cc: &eframe::CreationContext<'_>, open_data_log_path: String) -> Self {
-        let mut vec_alt = Vec::new();
-        let mut vec_alt_filtered = Vec::new();
-        let mut vec_vel_filtered = Vec::new();
-        let mut vec_acc_filtered = Vec::new();
-        let mut vec_jerk_filtered = Vec::new();
-
+        let mut vec_packets = Vec::new();
 
         let mut reader = csv::Reader::from_path(open_data_log_path).unwrap();
         let iter: DeserializeRecordsIter<File, LogPacketV1Csv> = reader.deserialize();
 
-        let mut t0 = None;
         for i in iter {
             if let Ok(result) = i {
                 let p: LogPacketV1Csv = result;
-                let t = p.time_boot_ms as f32 / 1000.;
-
-                let ft;
-                let m;
-                unsafe {
-                    ft = pressure_mbar_to_ft(p.ms5607_pressure_mbar);
-                    m = ft * 0.3048;
-                }
-
-                if t0.is_none() {
-                    t0 = Some(t);
-
-                    unsafe {
-                        AltimeterFilterInit(m, 0.);
-                        // AltimeterFilterProcess(m) / 0.3048;
-                    }
-                }
-
-                let ft_filtered;
-                let vel_filtered;
-                let acc_filtered;
-                let jerk_filtered;
-                unsafe {
-                    ft_filtered = AltimeterFilterProcess(m) / 0.3048;
-                    vel_filtered = AltimeterFilterGetVelocity();
-                    acc_filtered = AltimeterFilterGetAcceleration();
-                    jerk_filtered = AltimeterFilterGetJerk();
-                }
-
-                vec_alt.push(PlotPoint {
-                    x: (t - t0.unwrap()) as f64,
-                    y: ft as f64,
-                });
-
-                vec_alt_filtered.push(PlotPoint {
-                    x: (t - t0.unwrap()) as f64,
-                    y: ft_filtered as f64,
-                });
-
-                vec_vel_filtered.push(PlotPoint {
-                    x: (t - t0.unwrap()) as f64,
-                    y: vel_filtered as f64,
-                });
-
-                vec_acc_filtered.push(PlotPoint {
-                    x: (t - t0.unwrap()) as f64,
-                    y: acc_filtered as f64,
-                });
-
-                vec_jerk_filtered.push(PlotPoint {
-                    x: (t - t0.unwrap()) as f64,
-                    y: jerk_filtered as f64,
-                });
-
-
+                vec_packets.push(p);
                 // println!("{ft_filtered}");
             }
         }
 
-        println!("Points: {}", vec_alt.len());
-
         App {
-            vec_alt,
-            vec_alt_filtered,
-            vec_vel_filtered,
-            vec_acc_filtered,
-            vec_jerk_filtered,
+            vec_packets,
+            vec_alt: Default::default(),
+            vec_alt_filtered: Default::default(),
+            vec_vel_filtered: Default::default(),
+            vec_acc_filtered: Default::default(),
+            vec_jerk_filtered: Default::default(),
 
             link_axis: Vec2b::new(true, false),
-            link_cursor: Vec2b::new(true, false)
+            link_cursor: Vec2b::new(true, false),
+
+            process_variance_pre_apogee: [1., 1., 1., 1.],
+            process_variance_post_apogee: [1., 1., 1., 1.],
+            observation_variance: [1., 1.],
+        }
+    }
+
+    pub fn init_filter(&mut self) {
+        unsafe {
+            let ft = pressure_mbar_to_ft(self.vec_packets[0].ms5607_pressure_mbar);
+            let m = ft * 0.3048;
+            AltimeterFilterInit(m, 0.);
+        }
+    }
+
+    pub fn run_filter(&mut self) {
+        self.vec_alt.clear();
+        self.vec_alt_filtered.clear();
+        self.vec_vel_filtered.clear();
+        self.vec_acc_filtered.clear();
+        self.vec_jerk_filtered.clear();
+
+        let mut t0 = None;
+
+        for p in &self.vec_packets {
+            let t = p.time_boot_ms as f32 / 1000.;
+
+            let ft;
+            let m;
+            unsafe {
+                ft = pressure_mbar_to_ft(p.ms5607_pressure_mbar);
+                m = ft * 0.3048;
+            }
+
+            if t0.is_none() {
+                t0 = Some(t);
+            }
+
+            let ft_filtered;
+            let vel_filtered;
+            let acc_filtered;
+            let jerk_filtered;
+            unsafe {
+                ft_filtered = AltimeterFilterProcess(m) / 0.3048;
+                vel_filtered = AltimeterFilterGetVelocity();
+                acc_filtered = AltimeterFilterGetAcceleration();
+                jerk_filtered = AltimeterFilterGetJerk();
+            }
+
+            self.vec_alt.push(PlotPoint {
+                x: (t - t0.unwrap()) as f64,
+                y: ft as f64,
+            });
+
+            self.vec_alt_filtered.push(PlotPoint {
+                x: (t - t0.unwrap()) as f64,
+                y: ft_filtered as f64,
+            });
+
+            self.vec_vel_filtered.push(PlotPoint {
+                x: (t - t0.unwrap()) as f64,
+                y: vel_filtered as f64,
+            });
+
+            self.vec_acc_filtered.push(PlotPoint {
+                x: (t - t0.unwrap()) as f64,
+                y: acc_filtered as f64,
+            });
+
+            self.vec_jerk_filtered.push(PlotPoint {
+                x: (t - t0.unwrap()) as f64,
+                y: jerk_filtered as f64,
+            });
         }
     }
 }
 
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        egui::SidePanel::left("Sidebar").show(ctx, |ui| {
+            let process_labels = ["Altitude", "Velocity", "Acceleration", "Jerk"];
+            let observation_labels = ["Pressure Altitude", "Assumed Acceleration"];
+
+            self.init_filter();
+
+            ui.label("Process Variances (pre-apogee)");
+            egui::Grid::new("st")
+                .num_columns(2)
+                .striped(true)
+                .show(ui, |ui| {
+                    for i in 0..self.process_variance_pre_apogee.len() {
+                        ui.label(process_labels[i]);
+                        ui.add(
+                            egui::DragValue::new(&mut self.process_variance_pre_apogee[i])
+                                .speed(0.01)
+                                .range(0.001..=10000.),
+                        );
+                        ui.end_row();
+
+                        unsafe {
+                            AltimeterFilterSetProcessVariancePreApogee(
+                                i as i32,
+                                self.process_variance_pre_apogee[i],
+                            );
+                        }
+                    }
+                });
+
+            ui.label("Process Variances (post-apogee)");
+            egui::Grid::new("st")
+                .num_columns(2)
+                .striped(true)
+                .show(ui, |ui| {
+                    for i in 0..self.process_variance_post_apogee.len() {
+                        ui.label(process_labels[i]);
+                        ui.add(
+                            egui::DragValue::new(&mut self.process_variance_post_apogee[i])
+                                .speed(0.01)
+                                .range(0.001..=10000.),
+                        );
+                        ui.end_row();
+
+                        unsafe {
+                            AltimeterFilterSetProcessVariancePostApogee(
+                                i as i32,
+                                self.process_variance_post_apogee[i],
+                            );
+                        }
+                    }
+                });
+
+            ui.label("Observation Variances");
+            egui::Grid::new("obs")
+                .num_columns(2)
+                .striped(true)
+                .show(ui, |ui| {
+                    for i in 0..self.observation_variance.len() {
+                        ui.label(observation_labels[i]);
+                        ui.add(
+                            egui::DragValue::new(&mut self.observation_variance[i])
+                                .speed(0.01)
+                                .range(0.001..=10000.),
+                        );
+                        ui.end_row();
+
+                        unsafe {
+                            AltimeterFilterSetObservationVariance(
+                                i as i32,
+                                self.observation_variance[i],
+                            );
+                        }
+                    }
+                });
+
+            self.run_filter();
+        });
+
         egui::CentralPanel::default().show(ctx, |ui| {
             let link_group_id = ui.id().with("linked_demo");
 

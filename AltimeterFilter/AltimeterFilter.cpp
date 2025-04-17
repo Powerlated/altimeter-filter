@@ -23,7 +23,8 @@ struct AltimeterFilter
     Matrix<float, OBSERVATION_LEN, STATE_LEN> H;       // State to observation mapping
     Matrix<float, STATE_LEN, STATE_LEN> Phi;           // State transition matrix
     Vector<float, STATE_LEN> B;                        // State transition bias
-    Matrix<float, STATE_LEN, STATE_LEN> Q;             // Process noise covariance
+    Matrix<float, STATE_LEN, STATE_LEN> Q_preApogee;   // Process noise covariance
+    Matrix<float, STATE_LEN, STATE_LEN> Q_postApogee;  // Process noise covariance
     Matrix<float, OBSERVATION_LEN, OBSERVATION_LEN> R; // Observation noise covariance
 
     float max_accel;
@@ -44,8 +45,10 @@ static void AltimeterFilterPrint()
               << f.Phi << std::endl;
     std::cout << "\nB:\n"
               << f.B << std::endl;
-    std::cout << "\nQ:\n"
-              << f.Q << std::endl;
+    std::cout << "\nQ_preApogee:\n"
+              << f.Q_preApogee << std::endl;
+    std::cout << "\nQ_postApogee:\n"
+              << f.Q_postApogee << std::endl;
     std::cout << "\nR:\n"
               << f.R << std::endl;
 }
@@ -57,16 +60,23 @@ void AltimeterFilterInit(float altitude_m, float vel_z)
     f.P.setZero();
     f.H << 1, 0, 0, 0,
         0, 0, 0, 0;
-    f.Phi << 1, deltaT, 0, 0,
-        0, 1, deltaT, 0,
+
+    f.Phi << 1, deltaT, 1. / 2. * powf(deltaT, 2), (1. / 3.) * powf(deltaT, 3),
+        0, 1, deltaT, (1. / 2.) * powf(deltaT, 2),
         0, 0, 1, deltaT,
         0, 0, 0, 1;
     f.B << 0, 0, 0, 0;
 
-    f.Q << 0.100, 0, 0, 0,
-        0, 0.01, 0, 0,
-        0, 0, 0.01, 0,
-        0, 0, 0, 0.001;
+    f.Q_preApogee << 0.1, 0, 0, 0,
+        0, 0.1, 0, 0,
+        0, 0, 0.1, 0,
+        0, 0, 0, 0.1;
+
+    f.Q_postApogee << 0.1, 0, 0, 0,
+        0, 0.1, 0, 0,
+        0, 0, 0.1, 0,
+        0, 0, 0, 0.1;
+
     f.R << 100, 0,
         0, 100;
 
@@ -132,7 +142,12 @@ float AltimeterFilterProcess(float altitude_m)
     auto P_update = (I - K * f.H) * f.P;
 
     f.state = f.Phi * state_update + f.B;
-    f.P = f.Phi * P_update * f.Phi.transpose() + f.Q;
+    Matrix<float, 4, 4> &Q = f.Q_preApogee;
+    if (f.flight_stage >= STAGE_APOGEE)
+    {
+        Q = f.Q_postApogee;
+    }
+    f.P = f.Phi * P_update * f.Phi.transpose() + Q;
 
     return f.state(0);
 }
@@ -150,6 +165,21 @@ float AltimeterFilterGetAcceleration()
 float AltimeterFilterGetJerk()
 {
     return f.state(3);
+}
+
+void AltimeterFilterSetProcessVariancePreApogee(int i, float val)
+{
+    f.Q_preApogee(i, i) = val;
+}
+
+void AltimeterFilterSetProcessVariancePostApogee(int i, float val)
+{
+    f.Q_postApogee(i, i) = val;
+}
+
+void AltimeterFilterSetObservationVariance(int i, float val)
+{
+    f.R(i, i) = val;
 }
 
 float pressure_mbar_to_ft(float pressure_mbar)

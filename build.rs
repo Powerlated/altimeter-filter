@@ -1,11 +1,14 @@
 use std::env;
 use std::path::PathBuf;
+use std::process::Command;
 
 fn main() {
-    println!("cargo:rerun-if-changed=src");
+    println!("cargo:rustc-link-lib=altimeterfilter");
+    println!("cargo:rustc-link-search=build");
+    println!("cargo:rerun-if-changed=AltimeterFilter");
     
     let out_path = PathBuf::from(env::var("OUT_DIR").unwrap());
-    let src_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/");
+    let src_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("AltimeterFilter/");
 
     // Generate the bindings
     let builder = bindgen::Builder::default()
@@ -21,8 +24,6 @@ fn main() {
         .expect("Failed to write bindings");
 
     // Compile the C++ library
-    cc::Build::new()
-        .cpp(true)
-        .files(&[src_path.join("AltimeterFilter.cpp")])
-        .compile("AltimeterFilter");
+    Command::new("make").status().expect("make failed");
+    
 }
