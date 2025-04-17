@@ -1,6 +1,9 @@
-use altimeter_filter::pressure_mbar_to_ft;
+use altimeter_filter::{
+    AltimeterFilterGetAcceleration, AltimeterFilterGetVelocity, AltimeterFilterGetJerk, AltimeterFilterInit,
+    AltimeterFilterProcess, pressure_mbar_to_ft,
+};
 use csv::DeserializeRecordsIter;
-use eframe::egui::{self};
+use eframe::egui::{self, Vec2b};
 use egui_plot::{Legend, Line, Plot, PlotPoint, PlotPoints};
 use serde::Deserialize;
 use std::env;
@@ -9,6 +12,8 @@ use std::fs::File;
 fn main() -> eframe::Result {
     let args: Vec<String> = env::args().collect();
     let open_data_log_path = args.get(1).unwrap().clone();
+    // let open_data_log_path =
+        // "../irec/flight-data-logs/test-flight-4-12-2025_flight-only.csv".to_string();
 
     let native_options = eframe::NativeOptions {
         vsync: false,
@@ -39,13 +44,25 @@ pub struct LogPacketV1Csv {
 }
 
 struct App {
-    points: Vec<PlotPoint>,
+    vec_alt: Vec<PlotPoint>,
+    vec_alt_filtered: Vec<PlotPoint>,
+    vec_vel_filtered: Vec<PlotPoint>,
+    vec_acc_filtered: Vec<PlotPoint>,
+    vec_jerk_filtered: Vec<PlotPoint>,
+
+    link_axis: Vec2b,
+    link_cursor: Vec2b,
 }
 
 impl App {
     /// Called once before the first frame.
     pub fn new(cc: &eframe::CreationContext<'_>, open_data_log_path: String) -> Self {
-        let mut points = Vec::new();
+        let mut vec_alt = Vec::new();
+        let mut vec_alt_filtered = Vec::new();
+        let mut vec_vel_filtered = Vec::new();
+        let mut vec_acc_filtered = Vec::new();
+        let mut vec_jerk_filtered = Vec::new();
+
 
         let mut reader = csv::Reader::from_path(open_data_log_path).unwrap();
         let iter: DeserializeRecordsIter<File, LogPacketV1Csv> = reader.deserialize();
@@ -55,36 +72,130 @@ impl App {
             if let Ok(result) = i {
                 let p: LogPacketV1Csv = result;
                 let t = p.time_boot_ms as f32 / 1000.;
-                if t0.is_none() {
-                    t0 = Some(t);
-                }
-                
+
                 let ft;
+                let m;
                 unsafe {
                     ft = pressure_mbar_to_ft(p.ms5607_pressure_mbar);
+                    m = ft * 0.3048;
                 }
-                println!("{t}");
-                points.push(PlotPoint {
+
+                if t0.is_none() {
+                    t0 = Some(t);
+
+                    unsafe {
+                        AltimeterFilterInit(m, 0.);
+                        // AltimeterFilterProcess(m) / 0.3048;
+                    }
+                }
+
+                let ft_filtered;
+                let vel_filtered;
+                let acc_filtered;
+                let jerk_filtered;
+                unsafe {
+                    ft_filtered = AltimeterFilterProcess(m) / 0.3048;
+                    vel_filtered = AltimeterFilterGetVelocity();
+                    acc_filtered = AltimeterFilterGetAcceleration();
+                    jerk_filtered = AltimeterFilterGetJerk();
+                }
+
+                vec_alt.push(PlotPoint {
                     x: (t - t0.unwrap()) as f64,
                     y: ft as f64,
-                })
+                });
+
+                vec_alt_filtered.push(PlotPoint {
+                    x: (t - t0.unwrap()) as f64,
+                    y: ft_filtered as f64,
+                });
+
+                vec_vel_filtered.push(PlotPoint {
+                    x: (t - t0.unwrap()) as f64,
+                    y: vel_filtered as f64,
+                });
+
+                vec_acc_filtered.push(PlotPoint {
+                    x: (t - t0.unwrap()) as f64,
+                    y: acc_filtered as f64,
+                });
+
+                vec_jerk_filtered.push(PlotPoint {
+                    x: (t - t0.unwrap()) as f64,
+                    y: jerk_filtered as f64,
+                });
+
+
+                // println!("{ft_filtered}");
             }
         }
 
-        println!("Points: {}", points.len());
+        println!("Points: {}", vec_alt.len());
 
-        App { points }
+        App {
+            vec_alt,
+            vec_alt_filtered,
+            vec_vel_filtered,
+            vec_acc_filtered,
+            vec_jerk_filtered,
+
+            link_axis: Vec2b::new(true, false),
+            link_cursor: Vec2b::new(true, false)
+        }
     }
 }
 
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         egui::CentralPanel::default().show(ctx, |ui| {
+            let link_group_id = ui.id().with("linked_demo");
+
             Plot::new("My Plot")
                 .legend(Legend::default())
+                .height(500.0)
+                .link_axis(link_group_id, self.link_axis)
+                .link_cursor(link_group_id, self.link_cursor)
                 .show(ui, |plot_ui| {
-                    plot_ui
-                        .line(Line::new("Altitude", PlotPoints::Borrowed(&self.points)).name("Altitude"));
+                    plot_ui.line(
+                        Line::new("Altitude (ft)", PlotPoints::Borrowed(&self.vec_alt))
+                            .name("Altitude (ft)"),
+                    );
+                    plot_ui.line(
+                        Line::new(
+                            "Altitude (ft) (filtered)",
+                            PlotPoints::Borrowed(&self.vec_alt_filtered),
+                        )
+                        .name("Altitude (ft) (filtered)"),
+                    );
+                });
+
+            Plot::new("My Plot2")
+                .legend(Legend::default())
+                .height(500.0)
+                .link_axis(link_group_id, self.link_axis)
+                .link_cursor(link_group_id, self.link_cursor)
+                .show(ui, |plot_ui| {
+                    plot_ui.line(
+                        Line::new(
+                            "Velocity (m/s) (filtered)",
+                            PlotPoints::Borrowed(&self.vec_vel_filtered),
+                        )
+                        .name("Velocity (m/s) (filtered)"),
+                    );
+                    plot_ui.line(
+                        Line::new(
+                            "Acceleration (m/s²) (filtered)",
+                            PlotPoints::Borrowed(&self.vec_acc_filtered),
+                        )
+                        .name("Acceleration (m/s²) (filtered)"),
+                    );
+                    plot_ui.line(
+                        Line::new(
+                            "Jerk (m/s³) (filtered)",
+                            PlotPoints::Borrowed(&self.vec_jerk_filtered),
+                        )
+                        .name("Jerk (m/s³) (filtered)"),
+                    );
                 });
         });
     }
