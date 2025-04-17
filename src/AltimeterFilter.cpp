@@ -63,10 +63,10 @@ void AltimeterFilterInit(float altitude_m, float vel_z)
         0, 0, 0, 1;
     f.B << 0, 0, 0, 0;
 
-    f.Q << 0.100, 0,    0,     0,
-           0,     0.001,  0,     0,
-           0,     0,    0.100, 0,
-           0,     0,    0,     10;
+    f.Q << 0.100, 0, 0, 0,
+        0, 0.01, 0, 0,
+        0, 0, 0.01, 0,
+        0, 0, 0, 0.001;
     f.R << 100, 0,
         0, 100;
 
@@ -87,7 +87,7 @@ float AltimeterFilterProcess(float altitude_m)
     z(1) = 0;
 
     // Scale acceleration variance according to current acceleration
-    f.Q(2, 2) = fabs(AltimeterFilterGetAcceleration()) / 100;
+    // f.Q(2, 2) = fabs(AltimeterFilterGetAcceleration()) / 100;
 
     const float ACCEL_THRESHOLD = 20; // 20 m/s^2
 
@@ -102,29 +102,27 @@ float AltimeterFilterProcess(float altitude_m)
         // Detect motor burnout
         if (f.max_accel > ACCEL_THRESHOLD && AltimeterFilterGetJerk() < 0)
         {
-            // Set state update to involve gravity
-            f.B << 0, -g * deltaT, 0, 0;
-            // Set "observation" of acceleration to -g
-            z(1) = -g;
-            // Set acceleration state to relate to acceleration "observation"
-            f.H(1, 2) = 1;
-
             f.flight_stage = STAGE_BURNOUT;
         }
         break;
     case STAGE_BURNOUT:
+        // In burnout:
+        // Keep "observation" of acceleration at -g
+        z(1) = -g;
+        // Set acceleration state to relate to acceleration "observation"
+        f.H(1, 2) = 1;
+
         if (AltimeterFilterGetVelocity() < 0)
         {
-            // Rely entirely now on smoothed predictions, no more gravity modeling
-            f.B << 0, 0, 0, 0;
-            // Set "observation" of acceleration to 0
-            z(1) = 0;
-            // Set acceleration state to no longer relate to acceleration "observation"
-            f.H(1, 2) = 0;
-
             // TODO: FIRE DA EJECTION CHARGEEEEEE
             f.flight_stage = STAGE_APOGEE;
         }
+        break;
+    case STAGE_APOGEE:
+        // After apogee:
+        // Rely entirely now on smoothed predictions, no more gravity modeling
+        // Set acceleration state to no longer relate to acceleration "observation"
+        f.H(1, 2) = 0;
         break;
     }
 
