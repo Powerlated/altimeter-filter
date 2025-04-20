@@ -1,6 +1,6 @@
 #include "AltimeterFilter.h"
 #include <math.h>
-#include "Eigen/Dense"
+#include <Eigen/Dense>
 #include <iostream>
 
 using Eigen::Matrix;
@@ -14,6 +14,11 @@ const float g = 9.81f;
 #define STAGE_GROUND 0
 #define STAGE_BURNOUT 1
 #define STAGE_APOGEE 2
+
+float AltimeterFilterGetAltitude();
+float AltimeterFilterGetVelocity();
+float AltimeterFilterGetAcceleration();
+float AltimeterFilterGetJerk();
 
 // Vectors in Eigen are column vectors
 struct AltimeterFilter
@@ -84,7 +89,7 @@ void AltimeterFilterInit(float altitude_m, float vel_z)
     f.flight_stage = STAGE_GROUND;
 }
 
-float AltimeterFilterProcess(float altitude_m)
+struct AltimeterFilterOutput AltimeterFilterProcess(float altitude_m)
 {
     // Kalman gain
     auto K = f.P * f.H.transpose() * (f.H * f.P * f.H.transpose() + f.R).inverse();
@@ -130,13 +135,23 @@ float AltimeterFilterProcess(float altitude_m)
         break;
     case STAGE_APOGEE:
         // After apogee:
-        // Rely entirely now on smoothed predictions, no more gravity modeling
-        // Set acceleration state to no longer relate to acceleration "observation"
-        f.H(1, 2) = 0;
+        // While descending, parachute should keep velocity relatively constant
+        // Keep "observation" of acceleration at 0
+        z(1) = 0;
+        // Set acceleration state to relate to acceleration "observation"
+        f.H(1, 2) = 1;
         break;
     }
 
-    auto state_update = f.state + K * (z - f.H * f.state);
+    /* Kalman Filter Update*/
+    auto innovation = z - f.H * f.state;
+    // Innovation is how much the measured state deviates from the predicted state
+    // Which is then used to find the most likely state given the statistical and physical model
+    // If we clamp innovation per iteration we limit how much change the KF sees during sensor glitches, 
+    // which should make it more resilient to extreme barometer errors
+    // Thanks ChatGPT for telling me about clamping innovation
+    auto innovation_clamped = innovation.cwiseMin(1.).cwiseMax(-1.);
+        auto state_update = f.state + K * innovation_clamped;
     Matrix<float, STATE_LEN, STATE_LEN> I;
     I.setIdentity();
     auto P_update = (I - K * f.H) * f.P;
@@ -149,6 +164,25 @@ float AltimeterFilterProcess(float altitude_m)
     }
     f.P = f.Phi * P_update * f.Phi.transpose() + Q;
 
+    /* Clc*/
+    float time_to_apogee_s = 0;
+    if (f.flight_stage == STAGE_BURNOUT)
+    {
+        time_to_apogee_s = std::clamp(-AltimeterFilterGetVelocity() / AltimeterFilterGetAcceleration(), 0.f, 100.f);
+    }
+
+    struct AltimeterFilterOutput output = {
+        .altitude_m = AltimeterFilterGetAltitude(),
+        .velocity_mps = AltimeterFilterGetVelocity(),
+        .acceleration_mps2 = AltimeterFilterGetAcceleration(),
+        .jerk_mps3 = AltimeterFilterGetJerk(),
+        .time_to_apogee_s = time_to_apogee_s,
+    };
+    return output;
+}
+
+float AltimeterFilterGetAltitude()
+{
     return f.state(0);
 }
 

@@ -40,6 +40,7 @@ pub struct LogPacketV1Csv {
     pub adxl375_accel_z_mps2_fc_frame: f32,
 }
 
+#[derive(Default)]
 struct App {
     vec_packets: Vec<LogPacketV1Csv>,
 
@@ -48,6 +49,7 @@ struct App {
     vec_vel_filtered: Vec<PlotPoint>,
     vec_acc_filtered: Vec<PlotPoint>,
     vec_jerk_filtered: Vec<PlotPoint>,
+    vec_time_to_apogee_s_filtered: Vec<PlotPoint>,
 
     link_axis: Vec2b,
     link_cursor: Vec2b,
@@ -75,11 +77,6 @@ impl App {
 
         App {
             vec_packets,
-            vec_alt: Default::default(),
-            vec_alt_filtered: Default::default(),
-            vec_vel_filtered: Default::default(),
-            vec_acc_filtered: Default::default(),
-            vec_jerk_filtered: Default::default(),
 
             link_axis: Vec2b::new(true, false),
             link_cursor: Vec2b::new(true, false),
@@ -87,6 +84,8 @@ impl App {
             process_variance_pre_apogee: [1., 1., 1., 1.],
             process_variance_post_apogee: [1., 1., 1., 1.],
             observation_variance: [1., 1.],
+
+            ..Default::default()
         }
     }
 
@@ -104,6 +103,7 @@ impl App {
         self.vec_vel_filtered.clear();
         self.vec_acc_filtered.clear();
         self.vec_jerk_filtered.clear();
+        self.vec_time_to_apogee_s_filtered.clear();
 
         let mut t0 = None;
 
@@ -121,16 +121,11 @@ impl App {
                 t0 = Some(t);
             }
 
-            let ft_filtered;
-            let vel_filtered;
-            let acc_filtered;
-            let jerk_filtered;
+            let filter_out: AltimeterFilterOutput;
             unsafe {
-                ft_filtered = AltimeterFilterProcess(m) / 0.3048;
-                vel_filtered = AltimeterFilterGetVelocity();
-                acc_filtered = AltimeterFilterGetAcceleration();
-                jerk_filtered = AltimeterFilterGetJerk();
+                filter_out = AltimeterFilterProcess(m);
             }
+            let ft_filtered = filter_out.altitude_m / 0.3048;
 
             self.vec_alt.push(PlotPoint {
                 x: (t - t0.unwrap()) as f64,
@@ -144,17 +139,22 @@ impl App {
 
             self.vec_vel_filtered.push(PlotPoint {
                 x: (t - t0.unwrap()) as f64,
-                y: vel_filtered as f64,
+                y: filter_out.velocity_mps as f64,
             });
 
             self.vec_acc_filtered.push(PlotPoint {
                 x: (t - t0.unwrap()) as f64,
-                y: acc_filtered as f64,
+                y: filter_out.acceleration_mps2 as f64,
             });
 
             self.vec_jerk_filtered.push(PlotPoint {
                 x: (t - t0.unwrap()) as f64,
-                y: jerk_filtered as f64,
+                y: filter_out.jerk_mps3 as f64,
+            });
+
+            self.vec_time_to_apogee_s_filtered.push(PlotPoint {
+                x: (t - t0.unwrap()) as f64,
+                y: filter_out.time_to_apogee_s as f64,
             });
         }
     }
@@ -245,7 +245,7 @@ impl eframe::App for App {
 
             Plot::new("My Plot")
                 .legend(Legend::default())
-                .height(500.0)
+                .height(450.0)
                 .link_axis(link_group_id, self.link_axis)
                 .link_cursor(link_group_id, self.link_cursor)
                 .show(ui, |plot_ui| {
@@ -264,7 +264,7 @@ impl eframe::App for App {
 
             Plot::new("My Plot2")
                 .legend(Legend::default())
-                .height(500.0)
+                .height(450.0)
                 .link_axis(link_group_id, self.link_axis)
                 .link_cursor(link_group_id, self.link_cursor)
                 .show(ui, |plot_ui| {
@@ -288,6 +288,21 @@ impl eframe::App for App {
                             PlotPoints::Borrowed(&self.vec_jerk_filtered),
                         )
                         .name("Jerk (m/s³) (filtered)"),
+                    );
+                });
+
+            Plot::new("My Plot3")
+                .legend(Legend::default())
+                .height(500.0)
+                .link_axis(link_group_id, self.link_axis)
+                .link_cursor(link_group_id, self.link_cursor)
+                .show(ui, |plot_ui| {
+                    plot_ui.line(
+                        Line::new(
+                            "Time to Apogee (s) (filtered)",
+                            PlotPoints::Borrowed(&self.vec_time_to_apogee_s_filtered),
+                        )
+                        .name("Time to Apogee (s) (filtered)"),
                     );
                 });
         });
