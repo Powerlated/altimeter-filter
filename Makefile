@@ -22,7 +22,7 @@ lib/implot-0.16/implot_items.cpp \
 lib/implot-0.16/implot.cpp \
 
 
-CXXFLAGS = $(CXX_INCLUDES) -g -O0 -Wall
+CXXFLAGS = $(CXX_INCLUDES) -g -O3 -Wall -std=c++23
 
 OBJECTS = $(addprefix $(BUILD_DIR)/,$(notdir $(CXX_SOURCES:.cpp=.o)))
 vpath %.cpp $(sort $(dir $(CXX_SOURCES)))

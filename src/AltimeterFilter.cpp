@@ -6,8 +6,6 @@
 using Eigen::Matrix;
 using Eigen::Vector;
 
-constexpr int STATE_LEN = 4;
-constexpr int OBSERVATION_LEN = 2;
 const float deltaT = 0.010f;
 const float g = 9.81f;
 

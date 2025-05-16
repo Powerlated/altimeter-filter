@@ -1,6 +1,9 @@
 #ifndef ALTIMETER_FILTER_H
 #define ALTIMETER_FILTER_H
 
+constexpr int STATE_LEN = 4;
+constexpr int OBSERVATION_LEN = 2;
+
 struct AltimeterFilterOutput {
     float altitude_m;
     float velocity_mps;
