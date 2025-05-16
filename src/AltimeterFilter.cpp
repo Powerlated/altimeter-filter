@@ -7,16 +7,11 @@ using Eigen::Matrix;
 using Eigen::Vector;
 
 const float deltaT = 0.010f;
-const float g = 9.81f;
 
-#define STAGE_GROUND 0
-#define STAGE_BURNOUT 1
-#define STAGE_APOGEE 2
-
-float AltimeterFilterGetAltitude();
-float AltimeterFilterGetVelocity();
-float AltimeterFilterGetAcceleration();
-float AltimeterFilterGetJerk();
+static float GetAltitude();
+static float GetVelocity();
+static float GetAcceleration();
+static float GetJerk();
 
 // Vectors in Eigen are column vectors
 struct AltimeterFilter
@@ -32,6 +27,7 @@ struct AltimeterFilter
 
     float max_accel;
     int flight_stage;
+    float t_apogee;
 };
 
 struct AltimeterFilter f;
@@ -70,24 +66,21 @@ void AltimeterFilterInit(float altitude_m, float vel_z)
         0, 0, 0, 1;
     f.B << 0, 0, 0, 0;
 
-    f.Q_preApogee << 0.1, 0, 0, 0,
-        0, 0.1, 0, 0,
-        0, 0, 0.1, 0,
-        0, 0, 0, 0.1;
+    f.Q_preApogee.setZero();
+    f.Q_preApogee.diagonal() << 0.1, 0.1, 0.1, 0.1;
 
-    f.Q_postApogee << 0.1, 0, 0, 0,
-        0, 0.1, 0, 0,
-        0, 0, 0.1, 0,
-        0, 0, 0, 0.1;
+    f.Q_postApogee.setZero();
+    f.Q_postApogee.diagonal() << 0.1, 0.1, 0.1, 0.1;
 
-    f.R << 100, 0,
-        0, 100;
+    f.R.setZero();
+    f.R.diagonal() << 100, 100;
 
     f.max_accel = 0;
     f.flight_stage = STAGE_GROUND;
+    f.t_apogee = 0;
 }
 
-struct AltimeterFilterOutput AltimeterFilterProcess(float altitude_m)
+struct AltimeterFilterOutput AltimeterFilterProcess(float altitude_m, float accel_z_global_frame)
 {
     // Kalman gain
     auto K = f.P * f.H.transpose() * (f.H * f.P * f.H.transpose() + f.R).inverse();
@@ -100,32 +93,32 @@ struct AltimeterFilterOutput AltimeterFilterProcess(float altitude_m)
     z(1) = 0;
 
     // Scale acceleration variance according to current acceleration
-    // f.Q(2, 2) = fabs(AltimeterFilterGetAcceleration()) / 100;
+    // f.Q(2, 2) = fabs(GetAcceleration()) / 100;
 
     const float ACCEL_THRESHOLD = 20; // 20 m/s^2
 
-    if (f.max_accel < AltimeterFilterGetAcceleration())
+    if (f.max_accel < GetAcceleration())
     {
-        f.max_accel = AltimeterFilterGetAcceleration();
+        f.max_accel = GetAcceleration();
     }
 
     switch (f.flight_stage)
     {
     case STAGE_GROUND:
         // Detect motor burnout
-        if (f.max_accel > ACCEL_THRESHOLD && AltimeterFilterGetJerk() < 0)
+        if (f.max_accel > ACCEL_THRESHOLD && GetJerk() < 0)
         {
             f.flight_stage = STAGE_BURNOUT;
         }
         break;
     case STAGE_BURNOUT:
         // In burnout:
-        // Keep "observation" of acceleration at -g
-        z(1) = -g;
+        // Set observation of acceleration to sensor input minus g
+        z(1) = accel_z_global_frame;
         // Set acceleration state to relate to acceleration "observation"
         f.H(1, 2) = 1;
 
-        if (AltimeterFilterGetVelocity() < 0)
+        if (GetVelocity() < 0)
         {
             // TODO: FIRE DA EJECTION CHARGEEEEEE
             f.flight_stage = STAGE_APOGEE;
@@ -148,8 +141,8 @@ struct AltimeterFilterOutput AltimeterFilterProcess(float altitude_m)
     // If we clamp innovation per iteration we limit how much change the KF sees during sensor glitches, 
     // which should make it more resilient to extreme barometer errors
     // Thanks ChatGPT for telling me about clamping innovation
-    auto innovation_clamped = innovation.cwiseMin(1.).cwiseMax(-1.);
-        auto state_update = f.state + K * innovation_clamped;
+    // auto innovation_clamped = innovation.cwiseMin(1.).cwiseMax(-1.);
+        auto state_update = f.state + K * innovation;
     Matrix<float, STATE_LEN, STATE_LEN> I;
     I.setIdentity();
     auto P_update = (I - K * f.H) * f.P;
@@ -162,56 +155,52 @@ struct AltimeterFilterOutput AltimeterFilterProcess(float altitude_m)
     }
     f.P = f.Phi * P_update * f.Phi.transpose() + Q;
 
-    /* Clc*/
-    float time_to_apogee_s = 0;
-    if (f.flight_stage == STAGE_BURNOUT)
-    {
-        time_to_apogee_s = std::clamp(-AltimeterFilterGetVelocity() / AltimeterFilterGetAcceleration(), 0.f, 100.f);
-    }
-
     struct AltimeterFilterOutput output = {
-        .altitude_m = AltimeterFilterGetAltitude(),
-        .velocity_mps = AltimeterFilterGetVelocity(),
-        .acceleration_mps2 = AltimeterFilterGetAcceleration(),
-        .jerk_mps3 = AltimeterFilterGetJerk(),
-        .time_to_apogee_s = time_to_apogee_s,
+        .altitude_m = GetAltitude(),
+        .velocity_mps = GetVelocity(),
+        .acceleration_mps2 = GetAcceleration(),
+        .jerk_mps3 = GetJerk(),
     };
     return output;
 }
 
-float AltimeterFilterGetAltitude()
+static float GetAltitude()
 {
     return f.state(0);
 }
 
-float AltimeterFilterGetVelocity()
+static float GetVelocity()
 {
     return f.state(1);
 }
 
-float AltimeterFilterGetAcceleration()
+static float GetAcceleration()
 {
     return f.state(2);
 }
 
-float AltimeterFilterGetJerk()
+static float GetJerk()
 {
     return f.state(3);
 }
 
+int AltimeterFilterGetFlightStage() {
+    return f.flight_stage;
+}
+
 void AltimeterFilterSetProcessVariancePreApogee(int i, float val)
 {
-    f.Q_preApogee(i, i) = val;
+    f.Q_preApogee.diagonal()(i) = val;
 }
 
 void AltimeterFilterSetProcessVariancePostApogee(int i, float val)
 {
-    f.Q_postApogee(i, i) = val;
+    f.Q_postApogee.diagonal()(i) = val;
 }
 
 void AltimeterFilterSetObservationVariance(int i, float val)
 {
-    f.R(i, i) = val;
+    f.R.diagonal()(i) = val;
 }
 
 float pressure_mbar_to_ft(float pressure_mbar)
