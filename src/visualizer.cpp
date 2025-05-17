@@ -30,9 +30,9 @@ float alt_apogee;
 float t_burnout;
 float alt_burnout;
 
-float process_variance_pre_apogee[] = {100., 0., 0.955, 0.687};
+float process_variance_pre_apogee[] = {45.397, 0., 3.365, 0.540};
 float process_variance_post_apogee[] = {1., 1., 1., 1.};
-float observation_variance[] = {63.914};
+float observation_variance[] = {89.524, 3.810};
 
 bool graphOutOfDate = true;
 
@@ -220,6 +220,7 @@ void ShowVisualizer()
                 ImPlot::SetupAxisLinks(ImAxis_X1, &lims.X.Min, &lims.X.Max);
                 ImPlot::PlotLine("Altitude, original", v_filtered_t.data(), v_original_alt_ft.data(), v_filtered_t.size(), ImPlotLineFlags_None);
                 ImPlot::PlotLine("Altitude, filtered", v_filtered_t.data(), v_filtered_alt_ft.data(), v_filtered_t.size(), ImPlotLineFlags_None);
+                ImPlot::SetNextLineStyle(ImVec4(.99, .99, .2, 1));
                 ImPlot::PlotLine("Predicted apogee", v_filtered_t.data(), v_predicted_apogee_ft.data(), v_filtered_t.size(), ImPlotLineFlags_None);
                 float apogeeLineX[2] = {lims.X.Min, lims.X.Max};
                 float apogeeLineY[2] = {alt_apogee, alt_apogee};
