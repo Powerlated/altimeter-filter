@@ -80,7 +80,7 @@ void AltimeterFilterInit(float altitude_m, float vel_z)
     f.t_apogee = 0;
 }
 
-struct AltimeterFilterOutput AltimeterFilterProcess(float altitude_m, float accel_z_global_frame)
+struct AltimeterFilterOutput AltimeterFilterProcess(float altitude_m, float sensed_accel)
 {
     // Kalman gain
     auto K = f.P * f.H.transpose() * (f.H * f.P * f.H.transpose() + f.R).inverse();
@@ -102,21 +102,22 @@ struct AltimeterFilterOutput AltimeterFilterProcess(float altitude_m, float acce
         f.max_accel = GetAcceleration();
     }
 
+    // Set observation of acceleration to sensed acceleration
+    z(1) = sensed_accel;
+    // Set acceleration state to relate to acceleration "observation"
+    f.H(1, 2) = 1;
+
     switch (f.flight_stage)
     {
     case STAGE_GROUND:
         // Detect motor burnout
-        if (f.max_accel > ACCEL_THRESHOLD && GetJerk() < 0)
+        if (f.max_accel > ACCEL_THRESHOLD && sensed_accel < -3)
         {
             f.flight_stage = STAGE_BURNOUT;
         }
         break;
     case STAGE_BURNOUT:
         // In burnout:
-        // Set observation of acceleration to sensor input minus g
-        z(1) = accel_z_global_frame;
-        // Set acceleration state to relate to acceleration "observation"
-        f.H(1, 2) = 1;
 
         if (GetVelocity() < 0)
         {
@@ -208,3 +209,9 @@ float pressure_mbar_to_ft(float pressure_mbar)
     // TODO: Adjustable QNH
     return 145366.45 * (1.0 - powf(pressure_mbar / 1013.25, 0.190284));
 }
+
+float m_to_pressure_mbar(float m)
+{
+    return 0.3048 * powf(-0.00002567 * m + 3.73198405, 5.2553026);
+}
+

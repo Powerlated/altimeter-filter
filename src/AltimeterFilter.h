@@ -21,6 +21,7 @@ extern "C"
 {
 #endif
     float pressure_mbar_to_ft(float mbar);
+    float m_to_pressure_mbar(float m);
     void AltimeterFilterInit(float vel_z, float altitude_m);
     struct AltimeterFilterOutput AltimeterFilterProcess(float altitude_m, float accel_z);
     void AltimeterFilterSetProcessVariancePreApogee(int i, float val);
