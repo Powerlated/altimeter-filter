@@ -169,9 +169,9 @@ void RunFilter()
         // Apogee prediction
         if (AltimeterFilterGetFlightStage() == STAGE_BURNOUT)
         {
-            boost::numeric::odeint::runge_kutta4<state_type> rk;
+            boost::numeric::odeint::runge_kutta_cash_karp54<state_type> rk;
             state_type x{0, filter_out.altitude_m, 0, filter_out.velocity_mps}; // initial condition
-            const double dt = 0.01;
+            const double dt = 0.1;
             double t_apogee_predictor = t;
             while (x[3] > 0.0)
             {
