@@ -25,10 +25,13 @@ std::vector<float> v_predicted_apogee_ft;
 std::vector<float> v_earth_rel_accel;
 std::vector<float> v_filtered_accel;
 std::vector<float> v_predicted_accel;
+std::vector<float> v_apogee_ft_if_deployed_now;
 float t_apogee;
 float alt_apogee;
 float t_burnout;
 float alt_burnout;
+float t_deploy;
+float alt_deploy;
 
 float process_variance_pre_apogee[] = {45.397, 0., 3.365, 0.540};
 float process_variance_post_apogee[] = {1., 1., 1., 1.};
@@ -64,31 +67,62 @@ typedef boost::array<double, 4> state_type;
 
 // this is for asteria II IREC 2025
 float rocket_mass_kg = 17.63996;
-float drag_model_scale = 1.0;
+float drag_model_scale = 4.0;
+float target_apogee_ft = 6000;
+#define MARGIN_FT 100
+
+float drag_newtons_airbrakes_100(float mach_number)
+{
+    float x = mach_number;
+    return 4.21 - 36.6*x + 130*pow(x,2);
+}
 
 float drag_newtons_airbrakes_stowed(float mach_number)
 {
     float x = mach_number;
-    return -2.09 + 13 * x + 96.2 * powf(x, 2);
+    return 1.39 - 12.7*x + 56.4*pow(x,2);
 }
 
-float rocket_drag_newtons(float speed) {
-    auto speed_of_sound = 343; // TODO: Speed of sound varies with altitude
-    auto mach_number = speed / speed_of_sound;
-    return drag_newtons_airbrakes_stowed(mach_number) * drag_model_scale;
-}
 
-void projectile_motion_rocket(const state_type &x, state_type &dxdt, double t)
+void projectile_motion_rocket_airbrakes_stowed(const state_type &x, state_type &dxdt, double t)
 {
+    auto speed_of_sound = 343; // TODO: Speed of sound varies with altitude
     float speed = sqrtf(powf(x[2], 2) + powf(x[3], 2));
-    float drag_newtons = rocket_drag_newtons(speed);
-    // float angle = atan2f(x[1], x[0]);
-    // float drag_x_newtons = -drag_newtons * sinf(angle);
+    auto mach_number = speed / speed_of_sound;
+    float drag_newtons = drag_newtons_airbrakes_stowed(mach_number) * drag_model_scale;
     float drag_y_newtons = -drag_newtons * 1;
     dxdt[0] = x[2]; // = v_x
     dxdt[1] = x[3]; // = v_y
     dxdt[2] = 0 / rocket_mass_kg;
     dxdt[3] = -G + drag_y_newtons / rocket_mass_kg;
+}
+
+void projectile_motion_rocket_airbrakes_100(const state_type &x, state_type &dxdt, double t)
+{
+    auto speed_of_sound = 343; // TODO: Speed of sound varies with altitude
+    float speed = sqrtf(powf(x[2], 2) + powf(x[3], 2));
+    auto mach_number = speed / speed_of_sound;
+    float drag_newtons = drag_newtons_airbrakes_100(mach_number) * drag_model_scale;
+    float drag_y_newtons = -drag_newtons * 1;
+    dxdt[0] = x[2]; // = v_x
+    dxdt[1] = x[3]; // = v_y
+    dxdt[2] = 0 / rocket_mass_kg;
+    dxdt[3] = -G + drag_y_newtons / rocket_mass_kg;
+}
+
+float apogee_ft_if_deployed_now(float altitude_m, float velocity_mps)
+{
+    boost::numeric::odeint::runge_kutta_cash_karp54<state_type> rk;
+    state_type x{0, altitude_m, 0, velocity_mps}; // initial condition
+    const double dt = 0.1;
+    double t_apogee_predictor = 0;
+    while (x[3] > 0.0)
+    {
+        rk.do_step(projectile_motion_rocket_airbrakes_100, x, t_apogee_predictor, dt);
+        t_apogee_predictor += dt;
+    }
+
+    return x[1] / 0.3048;
 }
 
 void RunFilter()
@@ -100,6 +134,7 @@ void RunFilter()
     v_earth_rel_accel.reserve(entries.size());
     v_predicted_apogee_ft.reserve(entries.size());
     v_predicted_accel.reserve(entries.size());
+    v_apogee_ft_if_deployed_now.reserve(entries.size());
     v_filtered_t.clear();
     v_filtered_alt_ft.clear();
     v_filtered_vel.clear();
@@ -107,6 +142,14 @@ void RunFilter()
     v_predicted_apogee_ft.clear();
     v_filtered_accel.clear();
     v_predicted_accel.clear();
+    v_apogee_ft_if_deployed_now.clear();
+
+    t_apogee = 0.0;
+    alt_apogee = 0.0;
+    t_burnout = 0.0;
+    alt_burnout = 0.0;
+    t_deploy = 0.0;
+    alt_deploy = 0.0;
 
     auto ft = pressure_mbar_to_ft(entries.at(0).ms5607_pressure_mbar);
     auto m = ft * 0.3048;
@@ -152,7 +195,7 @@ void RunFilter()
         v_filtered_vel.push_back(filter_out.velocity_mps);
         v_earth_rel_accel.push_back(earth_rel_accel);
         v_filtered_accel.push_back(filter_out.acceleration_mps2);
-        v_predicted_accel.push_back(-rocket_drag_newtons(filter_out.velocity_mps) / rocket_mass_kg - G);
+        v_predicted_accel.push_back(-drag_newtons_airbrakes_stowed(filter_out.velocity_mps / 343) / rocket_mass_kg - G);
 
         if (t_apogee == 0.0 && AltimeterFilterGetFlightStage() == STAGE_APOGEE)
         {
@@ -175,15 +218,24 @@ void RunFilter()
             double t_apogee_predictor = t;
             while (x[3] > 0.0)
             {
-                rk.do_step(projectile_motion_rocket, x, t_apogee_predictor, dt);
+                rk.do_step(projectile_motion_rocket_airbrakes_stowed, x, t_apogee_predictor, dt);
                 t_apogee_predictor += dt;
             }
 
+            auto if_now = apogee_ft_if_deployed_now(filter_out.altitude_m, filter_out.velocity_mps);
+            if (if_now <= target_apogee_ft + MARGIN_FT && if_now >= target_apogee_ft - MARGIN_FT)  {
+                if (t_deploy == 0) {
+                    t_deploy = t;
+                    alt_deploy = filter_out.altitude_m / 0.3048;
+                }
+            }
             v_predicted_apogee_ft.push_back(x[1] / 0.3048);
+            v_apogee_ft_if_deployed_now.push_back(if_now);
         }
         else
         {
             v_predicted_apogee_ft.push_back(0);
+            v_apogee_ft_if_deployed_now.push_back(0);
         }
     }
 
@@ -222,12 +274,14 @@ void ShowVisualizer()
                 ImPlot::PlotLine("Altitude, filtered", v_filtered_t.data(), v_filtered_alt_ft.data(), v_filtered_t.size(), ImPlotLineFlags_None);
                 ImPlot::SetNextLineStyle(ImVec4(.99, .99, .2, 1));
                 ImPlot::PlotLine("Predicted apogee", v_filtered_t.data(), v_predicted_apogee_ft.data(), v_filtered_t.size(), ImPlotLineFlags_None);
+                ImPlot::PlotLine("Apogee if airbrake deployed now", v_filtered_t.data(), v_apogee_ft_if_deployed_now.data(), v_filtered_t.size(), ImPlotLineFlags_None);
                 float apogeeLineX[2] = {lims.X.Min, lims.X.Max};
                 float apogeeLineY[2] = {alt_apogee, alt_apogee};
                 ImPlot::SetNextLineStyle(ImVec4(.2, .8, .2, 1));
                 ImPlot::PlotLine("Final apogee", apogeeLineX, apogeeLineY, 2, ImPlotLineFlags_None);
                 ImPlot::Annotation(t_apogee, alt_apogee, ImPlot::GetLastItemColor(), ImVec2(10, 10), false, "Apogee");
                 ImPlot::Annotation(t_burnout, alt_burnout, ImPlot::GetLastItemColor(), ImVec2(10, 10), false, "Burnout");
+                ImPlot::Annotation(t_deploy, alt_deploy, ImPlot::GetLastItemColor(), ImVec2(10, 10), false, "Airbrake Deploy");
                 ImPlot::EndPlot();
             }
 
@@ -272,6 +326,7 @@ void ShowVisualizer()
         ImGui::Text("Other");
         graphOutOfDate |= ImGui::SliderFloat("Rocket Mass (kg)", &rocket_mass_kg, 0.0f, 25);
         graphOutOfDate |= ImGui::SliderFloat("Drag Model Scale", &drag_model_scale, 0.5f, 20.0f);
+        graphOutOfDate |= ImGui::SliderFloat("Target Apogee (ft)", &target_apogee_ft, 6000, 10000);
 
         ImGui::End();
     }
