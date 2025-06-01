@@ -2,6 +2,10 @@
 #include <math.h>
 #include <eigen3/Eigen/Dense>
 #include <iostream>
+#include <array>
+#include <boost/numeric/odeint.hpp>
+#include <boost/array.hpp>
+
 
 using Eigen::Matrix;
 using Eigen::Vector;
@@ -118,7 +122,6 @@ struct AltimeterFilterOutput AltimeterFilterProcess(float altitude_m, float sens
         break;
     case STAGE_BURNOUT:
         // In burnout:
-
         if (GetVelocity() < 0)
         {
             // TODO: FIRE DA EJECTION CHARGEEEEEE

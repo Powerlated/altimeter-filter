@@ -7,7 +7,8 @@ CXX_INCLUDES = \
 -Ilib/implot-0.16
 
 CXX_SOURCES = \
-src/AltimeterFilter.cpp \
+src/airbrakes/AltimeterFilter.cpp \
+src/airbrakes/airbrakes.cpp \
 src/main.cpp \
 src/visualizer.cpp \
 lib/imgui-1.91.9b/imgui_demo.cpp \
